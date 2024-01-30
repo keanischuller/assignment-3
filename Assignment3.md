@@ -1,0 +1,270 @@
+---
+date: 2024-01-29
+output:
+  pdf_document: default
+  word_document: default
+title: Exercise 3 - Team 3
+---
+
+`{r setup, include=FALSE} knitr::opts_chunk$set(echo = TRUE)`
+
+Let's start by loading our dataset from the last assignment.
+
+``` {r}
+data_path = "/Users/sheidamajidi/Desktop/Winter2024/COURSES/ORGB671/Exercise3/app_data.feather"
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+install.packages("arrow")
+library(arrow)
+applications <- read_feather(data_path)
+```
+
+Now that we have our data, we can run a logistic regression on examiner
+mobility with AU indicator as our target variable, also known as our y.
+
+`{r pressure, echo=FALSE} View(applications)`
+
+We need to add the column for AU_move_indicator from last session. Since
+we're having trouble running the entire code, we've chosen to rewrite
+our own pre-processing here to create a lighter code file. However, the
+code to create the AU indicator creates a column that is holds true or
+false. As such, we need to turn the true/false into 1/0.
+
+\`\`\`{r pressuree, echo=FALSE} install.packages("dplyr") library(dplyr)
+applications \<- applications %\>% group_by(examiner_id) %\>% mutate(
+AU_move_indicator = n_distinct(examiner_art_unit) \> 1,
+AU_move_indicator = as.integer(AU_move_indicator) ) %\>% ungroup()
+
+
+
+    We want to ensure that there's no null values in the variables that we're going to use for our analysis. We can use median or mode imputation to simplify this process for the sake of getting a result for our prediction, but the best scenario would be to have used a processed dataset from assignment 2.
+
+    ```{r}
+    # Checking for null values in each categorical variable
+    sum(is.na(applications$disposal_type))
+    sum(is.na(applications$gender))
+    sum(is.na(applications$race))
+
+Since we only have missing values for gender, we should perform
+imputation on that variable. However, if we use mode imputation on
+gender, all the remaining null values will be filled with either one or
+the other gender that is more prominent in the dataset, which can
+further skew the results. As such, we will try to use the code from
+assignment 2 to use the first name as a tell for gender.
+
+\`\`\`{r eval=TRUE, include=FALSE} install.packages("gender")
+library(gender)
+
+# get a list of first names without repetitions
+
+examiner_names \<- applications %\>% distinct(examiner_name_first)
+
+library(tidyr) \# get a table of names and gender examiner_names_gender
+\<- examiner_names %\>% do(results = gender(.\$examiner_name_first,
+method = "ssa")) %\>% unnest(cols = c(results), keep_empty = TRUE) %\>%
+select( examiner_name_first = name, gender, proportion_female )
+
+examiner_names_gender
+
+# remove extra colums from the gender table
+
+examiner_names_gender \<- examiner_names_gender %\>%
+select(examiner_name_first, gender)
+
+# joining gender back to the dataset
+
+applications \<- applications %\>% left_join(examiner_names_gender, by =
+"examiner_name_first")
+
+# cleaning up
+
+rm(examiner_names) rm(examiner_names_gender) gc()
+
+
+    The code above from the second assignment cannot be run, since it crashes our R studios when reaching the left join code.
+
+    As such, we will use mode even though we know it will skew our data.
+
+    ```{r}
+    # Function to calculate mode, handling NA values
+    getMode <- function(v) {
+       # Removing NA values
+       v <- na.omit(v)
+
+       uniqv <- unique(v)
+       uniqv[which.max(tabulate(match(v, uniqv)))]
+    }
+
+    # Mode imputation for 'gender'
+    if(sum(is.na(applications$gender.x)) > 0) {
+      mode_gender <- getMode(applications$gender.x)
+      applications$gender.x[is.na(applications$gender.x)] <- mode_gender
+    }
+
+Now we can re-check to make sure there's no null values left.
+
+``` {r}
+sum(is.na(applications$gender.x))
+```
+
+Given that we have our binary target variable and that our data is
+ready, we can run a multiple logistic regression to be able to predict
+if someone will move art units or not.
+
+``` {r}
+set.seed(123)  # for reproducibility
+applications_subset <- applications[sample(nrow(applications), 10000), ]
+mlogit <- glm(AU_move_indicator ~ filing_date + examiner_art_unit + uspc_class + disposal_type + race + tenure_days, 
+              data = applications_subset, 
+              family = "binomial")
+
+summary(mlogit)
+```
+
+``` {r}
+
+# Making predictions
+
+# Ensuring 'uspc_class' is numeric in the training dataset
+applications_subset$uspc_class <- as.numeric(as.character(applications_subset$uspc_class))
+
+# Refitting the model with 'uspc_class' as numeric
+mlogit <- glm(AU_move_indicator ~ filing_date + examiner_art_unit + uspc_class + disposal_type + race + tenure_days, 
+              data = applications_subset, 
+              family = "binomial")
+
+# Creating a new data frame for prediction with 'uspc_class' as numeric
+Prob_1 <- data.frame(
+  filing_date = as.Date("2000-01-26"),
+  examiner_art_unit = 1734,
+  uspc_class = 5156,  # Keep uspc_class as numeric
+  disposal_type = factor("ISS", levels = levels(applications_subset$disposal_type)),
+  race = factor("Asian", levels = levels(applications_subset$race)),
+  tenure_days = 5600
+)
+
+# Making predictions using the logistic regression model
+predicted_probabilities <- predict(mlogit, newdata = Prob_1, type = "response")
+
+# Viewing the predicted probabilities
+predicted_probabilities
+
+```
+
+We can also use train/test split prior to have a validation set. This
+allows us to better evaluate our model's predictions.
+
+``` {r}
+install.packages("caTools")
+install.packages("pROC")
+library(caTools)
+library(pROC)
+
+# Splitting the data into training (70%) and test (30%) sets
+set.seed(123) # for reproducibility
+split <- sample.split(applications$AU_move_indicator, SplitRatio = 0.7)
+training_set <- subset(applications, split == TRUE)
+test_set <- subset(applications, split == FALSE)
+```
+
+We have to fit our model onto the training set.
+
+#\`\`\`{r} \# Check for NA values in gender and count them
+sum(is.na(applications\$gender.x))
+
+# Check the unique values and data type of gender before conversion
+
+unique(applications$gender.x) str(applications$gender.x)
+
+# If the number of NA values is significant, decide how to handle them (e.g., imputation)
+
+# If imputation is not feasible or desirable, you might consider excluding these rows
+
+# Convert gender to factor after handling NA values, if any
+
+applications$gender.x <- as.factor(applications$gender.x)
+
+\#``{r} summary(applications) str(applications)
+
+
+    ```{r}
+    # Print structure and names of the applications data frame
+    str(applications)
+    names(applications)
+
+    # Load required packages
+    library(caTools)
+    library(dplyr)
+
+    # Check if 'gender.x' column exists in the applications data frame
+    if ("gender.x" %in% names(applications)) {
+      # Convert 'gender.x' to factor, and other categorical variables as well
+      applications <- applications %>%
+          mutate(
+              gender.x = as.factor(gender.x),
+              disposal_type = as.factor(disposal_type),
+              race = as.factor(race)
+          )
+    } else {
+      cat("'gender.x' column not found in applications data frame.\n")
+    }
+
+    # Further processing if 'gender.x' exists
+    if ("gender.x" %in% names(applications)) {
+      # Print some information about gender.x after conversion
+      cat("Number of rows in applications:", nrow(applications), "\n")
+      cat("Number of unique values in applications$gender.x:", length(unique(applications$gender.x)), "\n")
+      cat("First few values of applications$gender.x:", head(applications$gender.x), "\n")
+
+      # Handle non-numeric values in uspc_class
+      applications$uspc_class <- as.numeric(as.character(applications$uspc_class))
+
+      # Check for NAs after conversion and decide how to handle them
+      sum_na_uspc_class <- sum(is.na(applications$uspc_class))
+      cat("Number of NA values in applications$uspc_class:", sum_na_uspc_class, "\n")
+
+      # Splitting the data into a smaller subset, training (70%) and test (30%) sets
+      set.seed(123) # for reproducibility
+      applications_subset <- applications[sample(nrow(applications), 10000), ]
+
+      # Ensure loading caTools before using sample.split
+      split <- sample.split(applications_subset$AU_move_indicator, SplitRatio = 0.7)
+      training_set <- subset(applications_subset, split == TRUE)
+      test_set <- subset(applications_subset, split == FALSE)
+
+      # Fitting the model on the training set
+      model <- glm(AU_move_indicator ~ filing_date + examiner_art_unit + uspc_class + disposal_type + gender.x + race + tenure_days, 
+                   family = binomial(link = 'logit'), 
+                   data = training_set)
+    } else {
+      cat("Skipping model fitting as 'gender.x' is not present in the applications data frame.\n")
+    }
+
+``` {r}
+summary(model)
+```
+
+After fitting on the training set, we can tets our model using the test
+set.
+
+``` {r}
+# Predicting probabilities on the test set
+probabilities <- predict(model, newdata = test_set, type = "response")
+
+# Binarizing the predictions based on a threshold (e.g., 0.5) ?
+# predictions <- ifelse(probabilities > 0.5, 1, 0)
+```
+
+Now that we've tested our predictions, we can plot the ROC curve.
+
+``` {r}
+# ROC Curve
+roc_curve <- roc(test_set$AU_move_indicator, probabilities)
+plot(roc_curve, main = "ROC Curve")
+```
+
+We can also calculate the AUC using the ROC curve we found above.
+
+``` {r}
+# Calculating AUC
+auc(roc_curve)
+```
